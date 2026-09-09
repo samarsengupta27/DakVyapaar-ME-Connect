@@ -1,0 +1,87 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function u() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function role(r) { return signedIn() && u().role == r; }
+    function anyRole() { return signedIn(); }
+    function admin() { return signedIn() && u().role == "ADMIN"; }
+    function me() { return signedIn() && u().role == "ME"; }
+    function nodal() { return signedIn() && u().role == "NODAL"; }
+    function manager() { return signedIn() && (u().role=="DO" || u().role=="RO" || u().role=="CO" || u().role=="ADMIN"); }
+
+    function inScope(d) {
+      return admin()
+        || (u().role=="CO" && d.circleId==u().circleId)
+        || (u().role=="RO" && d.regionId==u().regionId)
+        || (u().role=="DO" && d.divisionId==u().divisionId)
+        || (u().role=="ME" && d.meId==u().meId)
+        || (u().role=="NODAL" && d.nodalOfficeId==u().nodalOfficeId);
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid==uid || manager());
+      allow write: if admin();
+    }
+
+    match /products/{id} { allow read: if signedIn(); allow write: if admin(); }
+    match /organisations/{id} { allow read: if signedIn(); allow write: if admin(); }
+    match /divisions/{id} { allow read: if signedIn(); allow write: if admin() || role("DO"); }
+    match /offices/{id} { allow read: if signedIn(); allow write: if admin() || role("DO"); }
+
+    match /customers/{id} {
+      allow read: if signedIn() && inScope(resource.data);
+      allow create: if me() && request.resource.data.meId==u().meId && request.resource.data.divisionId==u().divisionId;
+      allow update: if signedIn() && inScope(resource.data) && inScope(request.resource.data);
+      allow delete: if admin();
+    }
+
+    match /leads/{id} {
+      allow read: if signedIn() && inScope(resource.data);
+      allow create: if me() && request.resource.data.meId==u().meId;
+      allow update: if signedIn() && inScope(resource.data) && inScope(request.resource.data);
+      allow delete: if admin();
+    }
+
+    match /visits/{id} {
+      allow read: if signedIn() && inScope(resource.data);
+      allow create: if me() && request.resource.data.meId==u().meId;
+      allow update: if signedIn() && inScope(resource.data) && request.resource.data.meId==resource.data.meId;
+      allow delete: if admin();
+    }
+
+    match /followUps/{id} {
+      allow read: if signedIn() && inScope(resource.data);
+      allow create: if me() && request.resource.data.meId==u().meId;
+      allow update: if signedIn() && inScope(resource.data);
+      allow delete: if admin();
+    }
+
+    match /billingRecords/{id} {
+      allow read: if signedIn() && inScope(resource.data);
+      allow write: if false; // Billing is server processed.
+    }
+
+    match /billingUploads/{id} {
+      allow read: if manager() || nodal();
+      allow write: if false;
+    }
+
+    match /targets/{id} {
+      allow read: if signedIn() && inScope(resource.data);
+      allow write: if false; // Cloud Function only.
+    }
+
+    match /auditLogs/{id} {
+      allow read: if manager();
+      allow write: if false;
+    }
+
+    match /counters/{id} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} { allow read, write: if false; }
+  }
+}
